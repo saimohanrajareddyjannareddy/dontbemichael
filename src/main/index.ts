@@ -430,7 +430,7 @@ const hookServer = new HookServer(
   },
   () => ({ ...knowledge.agentAccess(), meaning: meaningSearch() }),
   companyProfileForAgents,
-  (agentId) => booksReadRoleIds().has(agentId),
+  (agentId) => agentHasBooksRead(agentId),
   memberPresent,
   (signal) => onPlanSignal(signal)
 );
@@ -2163,6 +2163,36 @@ function booksReadRoleIds(): Set<string> {
   } catch (e) { console.error('[quickbooks] pack roles:', e); }
   booksReaders = ids;
   return ids;
+}
+
+/** Job titles (lowercased) of pack roles that read the books. Read once:
+ *  the bundled packs don't change while the app runs. */
+let booksReadTitles: Set<string> | undefined;
+function booksReadRoleTitles(): Set<string> {
+  if (booksReadTitles) return booksReadTitles;
+  const titles = new Set<string>();
+  try {
+    for (const { pack } of loadBundledPacks({ packsDir }).packs) {
+      for (const role of pack.agents) {
+        if (levelFor(role, 'books.read') !== 'off') titles.add(role.role.trim().toLowerCase());
+      }
+    }
+  } catch (e) { console.error('[quickbooks] pack role titles:', e); }
+  booksReadTitles = titles;
+  return titles;
+}
+
+/** QuickBooks on + Read-only default, based on the agent's role — not the agent id.
+ *  `booksReadRoleIds()` holds pack role *ids* (e.g. `oscar`), but a hired agent gets
+ *  a fresh agent id, so a bookkeeper hired later never matched and started with
+ *  QuickBooks off. Match the hire's job title against the pack roles instead. */
+function agentHasBooksRead(agentId: string): boolean {
+  // Back-compat: an agent whose id literally is a books role id (the original oscar).
+  if (booksReadRoleIds().has(agentId)) return true;
+  let title = '';
+  try { title = (hive.registry().agents[agentId]?.role ?? '').split(': ')[0].trim().toLowerCase(); }
+  catch { /* no hive yet */ }
+  return !!title && booksReadRoleTitles().has(title);
 }
 
 /** The agent-facing `doc-text` CLI, built beside index.js (inside the asar when
@@ -4824,7 +4854,7 @@ const connectorsUnapplied = new Map<string, number>();
  *  uses is signed in (Claude loads no tools for one that needs sign in, so
  *  signing in later needs a restart too). */
 function connectorStart(cfg: HarnessConfig, agentId: string): { plan: SpawnConnectorPlan; sig: string } {
-  const books = booksReadRoleIds().has(agentId);
+  const books = agentHasBooksRead(agentId);
   const plan = spawnConnectorPlan(cfg, agentId, books);
   const signedIn = usableConnectors(cfg, agentId, books).map((c) => `${c.key}:${c.status}`).sort().join(',');
   return { plan, sig: `${plan.strip ? 'strip' : [...plan.deny].sort().join('|')}#${signedIn}` };
